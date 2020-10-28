@@ -1,118 +1,93 @@
-# Automated AMI and Snapshot Deletion
+# Automated AMI Backups
 #
-# @author Bobby Kozora
+# This script will search for all instances having a tag with the name "backup"
+# and value "Backup" on it. As soon as we have the instances list, we loop
+# through each instance
+# and create an AMI of it. Also, it will look for a "Retention" tag key which
+# will be used as a retention policy number in days. If there is no tag with
+# that name, it will use a 7 days default value for each AMI.
 #
-# This script will search for all instances having a tag named "Backup" with a value of "Backup".
-# As soon as we have the instances list, we loop through each instance
-# and reference the AMIs of that instance. We check that the latest daily backup
-# succeeded then we store every image that's reached its DeleteOn tag's date for
-# deletion. We then loop through the AMIs, deregister them and remove all the
-# snapshots associated with that AMI.
+# After creating the AMI it creates a "DeleteOn" tag on the AMI indicating when
+# it will be deleted using the Retention value and another Lambda function
 
 import boto3
 import collections
 import datetime
-import time
 import sys
+import pprint
 
-ec = boto3.client('ec2', 'us-east-1')
-ec2 = boto3.resource('ec2', 'us-east-1')
-images = ec2.images.filter(Owners=["self"])
+ec = boto3.client('ec2')
+#image = ec.Image('id')
 
+def format_tags(tags):
+    list_tags = []
+    for tag in tags:
+        new_dict = {}
+        new_dict[tag['Key']] = tag['Value']
+        list_tags.append(new_dict)
+    return list_tags
 
 def lambda_handler(event, context):
 
     reservations = ec.describe_instances(Filters=[
         {
-            'Name': 'tag-key',
-            'Values': ['backup', 'Backup']
+            'Name': 'tag:Backup',
+            'Values': ['Daily']
         },
     ]).get('Reservations', [])
 
     instances = sum([[i for i in r['Instances']] for r in reservations], [])
 
-    print("Found %d instances that need evaluated" % len(instances))
+    print("Found %d instances that need backing up" % len(instances))
 
     to_tag = collections.defaultdict(list)
 
-    date = datetime.datetime.now()
-    date_fmt = date.strftime('%Y-%m-%d')
-
-    imagesList = []
-
-    # Set to true once we confirm we have a backup taken today
-    backupSuccess = False
-
-    # Loop through all of our instances with a tag named "Backup"
     for instance in instances:
-        imagecount = 0
+        retention_days = 7
+        server_name = ''
 
-        # Loop through each image of our current instance
-        for image in images:
+        #create_image(instance_id, name, description=None, no_reboot=False, block_device_mapping=None, dry_run=False)
+        # DryRun, InstanceId, Name, Description, NoReboot, BlockDeviceMappings
+        create_time = datetime.datetime.now()
+        create_fmt = create_time.strftime('%Y-%m-%d')
+        
+        for tags in format_tags(instance.tags):
+            if 'Name' in tags:
+                server_name = tags['Name']
+        AMIid = ec.create_image(
+            InstanceId=instance['InstanceId'],
+            Name="Lambda - " + server_name + " from " +
+            create_fmt,
+            Description="Lambda created AMI of instance " +
+            instance['InstanceId'] + " from " + create_fmt,
+            NoReboot=True,
+            DryRun=False)
 
-            # Our other Lambda Function names its AMIs Lambda - i-instancenumber.
-            # We now know these images are auto created
-            if image.name.startswith('Lambda - ' + instance['InstanceId']):
+        pprint.pprint(instance)
 
-                # print "FOUND IMAGE " + image.id + " FOR INSTANCE " + instance['InstanceId']
+        to_tag[retention_days].append(AMIid['ImageId'])
 
-                # Count this image's occcurance
-                imagecount = imagecount + 1
+        print("Retaining AMI %s of instance %s for %d days" % (
+            AMIid['ImageId'],
+            instance['InstanceId'],
+            retention_days,
+        ))
 
-                try:
-                    if image.tags is not None:
-                        deletion_date = [
-                            t.get('Value') for t in image.tags
-                            if t['Key'] == 'DeleteOn'
-                        ][0]
-                        delete_date = time.strptime(deletion_date, "%m-%d-%Y")
-                except IndexError:
-                    deletion_date = False
-                    delete_date = False
+    print(to_tag.keys())
 
-                today_time = datetime.datetime.now().strftime('%m-%d-%Y')
-                # today_fmt = today_time.strftime('%m-%d-%Y')
-                today_date = time.strptime(today_time, '%m-%d-%Y')
+    for retention_days in to_tag.keys():
+        delete_date = datetime.date.today() + datetime.timedelta(
+            days=retention_days)
+        delete_fmt = delete_date.strftime('%m-%d-%Y')
+        print("Will delete %d AMIs on %s" %
+              (len(to_tag[retention_days]), delete_fmt))
 
-                # If image's DeleteOn date is less than or equal to today,
-                # add this image to our list of images to process later
-                if delete_date <= today_date:
-                    imagesList.append(image.id)
+        #break
 
-                # Make sure we have an AMI from today and mark backupSuccess as true
-                if image.name.endswith(date_fmt):
-                    # Our latest backup from our other Lambda Function succeeded
-                    backupSuccess = True
-                    print("Latest backup from " + date_fmt + " was a success")
-
-        print("instance " + instance['InstanceId'] + " has " +
-              str(imagecount) + " AMIs")
-
-    print("=============")
-
-    print("About to process the following AMIs:")
-    print(imagesList)
-
-    if backupSuccess == True:
-
-        myAccount = boto3.client('sts').get_caller_identity()['Account']
-        snapshots = ec.describe_snapshots(MaxResults=1000,
-                                          OwnerIds=[myAccount])['Snapshots']
-
-        # loop through list of image IDs
-        for image in imagesList:
-            print("deregistering image %s" % image)
-            amiResponse = ec.deregister_image(
-                DryRun=False,
-                ImageId=image,
-            )
-
-            for snapshot in snapshots:
-                if snapshot['Description'].find(image) > 0:
-                    snap = ec.delete_snapshot(
-                        SnapshotId=snapshot['SnapshotId'])
-                    print("Deleting snapshot " + snapshot['SnapshotId'])
-                    print("-------------")
-
-    else:
-        print("No current backup found. Termination suspended.")
+        ec.create_tags(Resources=to_tag[retention_days],
+                       Tags=[
+                           {
+                               'Key': 'DeleteOn',
+                               'Value': delete_fmt
+                           },
+                       ])
