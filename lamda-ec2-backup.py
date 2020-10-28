@@ -19,20 +19,13 @@ import pprint
 ec = boto3.client('ec2')
 #image = ec.Image('id')
 
-def format_tags(tags):
-    list_tags = []
-    for tag in tags:
-        new_dict = {}
-        new_dict[tag['Key']] = tag['Value']
-        list_tags.append(new_dict)
-    return list_tags
-
 def lambda_handler(event, context):
-
+    backup_on = event['Backup']
+    retention = event['DeleteOn']
     reservations = ec.describe_instances(Filters=[
         {
             'Name': 'tag:Backup',
-            'Values': ['Daily']
+            'Values': [backup_on]
         },
     ]).get('Reservations', [])
 
@@ -43,7 +36,7 @@ def lambda_handler(event, context):
     to_tag = collections.defaultdict(list)
 
     for instance in instances:
-        retention_days = 7
+        retention_days = retention
         server_name = ''
 
         #create_image(instance_id, name, description=None, no_reboot=False, block_device_mapping=None, dry_run=False)
@@ -51,12 +44,13 @@ def lambda_handler(event, context):
         create_time = datetime.datetime.now()
         create_fmt = create_time.strftime('%Y-%m-%d')
         
-        for tags in format_tags(instance.tags):
-            if 'Name' in tags:
-                server_name = tags['Name']
+        for tags in instance['Tags']:
+            if tags['Key'] == 'Name':
+                server_name = tags['Value']
+            
         AMIid = ec.create_image(
             InstanceId=instance['InstanceId'],
-            Name="Lambda - " + server_name + " from " +
+            Name="Backup - " + server_name + " from " +
             create_fmt,
             Description="Lambda created AMI of instance " +
             instance['InstanceId'] + " from " + create_fmt,
