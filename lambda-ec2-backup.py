@@ -1,12 +1,8 @@
 # Automated AMI Backups
 #
-# This script will search for all instances having a tag with the name "backup"
-# and value "Backup" on it. As soon as we have the instances list, we loop
-# through each instance
-# and create an AMI of it. Also, it will look for a "Retention" tag key which
-# will be used as a retention policy number in days. If there is no tag with
-# that name, it will use a 7 days default value for each AMI.
-#
+# This script will search for all instances having a tag with the name "Backup"
+# As soon as we have the instances list, we loop through each instance
+# it will use a parameter passed in from Cloudwatch for default value of Backup tag value and retention days.
 # After creating the AMI it creates a "DeleteOn" tag on the AMI indicating when
 # it will be deleted using the Retention value and another Lambda function
 
