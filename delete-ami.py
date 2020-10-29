@@ -31,6 +31,7 @@ def lambda_handler(event, context):
         response = ec.deregister_image(
         ImageId=image['ImageId']
         )
+    #to ensure that the ami is deleted before snapshot is attempting to delete
     time.sleep(10)
         
         #delete snapshots based off snapshot ID array
