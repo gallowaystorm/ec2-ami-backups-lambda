@@ -6,11 +6,13 @@ import time
 def lambda_handler(event, context):
     ec = boto3.client('ec2')
     
+    #get current date
     delete_date = datetime.date.today() 
+    #change current date to fit DeleteOn tag format
     delete_fmt = delete_date.strftime('%m-%d-%Y')
     snapshots = []
     
-    
+    #get images that have a DeleteOn tag for current date
     images = ec.describe_images(Filters=[
         {
             'Name': 'tag:DeleteOn',
@@ -21,6 +23,7 @@ def lambda_handler(event, context):
     length_array = len(images['Images'])
     print(str(length_array) + " AMI's need to be deleted")
     increment = 0
+    #get list of EBS snapshot ids of volumes attached to images for deletion in snapshots later
     while increment < length_array:
         ebs_mapping = images['Images'][increment]['BlockDeviceMappings']
         print(ebs_mapping)
@@ -31,7 +34,7 @@ def lambda_handler(event, context):
             else:
                 continue
         increment += 1
-    
+    #deregister AMI from amazon
     for image in images['Images']:
         print(image)
         response = ec.deregister_image(
