@@ -17,8 +17,10 @@ import pprint
 ec = boto3.client('ec2')
 
 def lambda_handler(event, context):
+    #tags passed in through cloudwatch
     backup_on = event['Backup']
     retention = event['DeleteOn']
+    #get tag info of instance
     reservations = ec.describe_instances(Filters=[
         {
             'Name': 'tag:Backup',
@@ -35,14 +37,14 @@ def lambda_handler(event, context):
     for instance in instances:
         retention_days = retention
         server_name = ''
-
         create_time = datetime.datetime.now()
         create_fmt = create_time.strftime('%Y-%m-%d')
         
         for tags in instance['Tags']:
+            #set value of server name based off tags
             if tags['Key'] == 'Name':
                 server_name = tags['Value']
-            
+        #create AMI
         AMIid = ec.create_image(
             InstanceId=instance['InstanceId'],
             Name="Backup - " + server_name + " from " +
@@ -65,13 +67,14 @@ def lambda_handler(event, context):
     print(to_tag.keys())
 
     for retention_days in to_tag.keys():
+        #create value for "DeleteOn" tag
         delete_date = datetime.date.today() + datetime.timedelta(
             days=retention_days)
         delete_fmt = delete_date.strftime('%m-%d-%Y')
         print("Will delete %d AMIs on %s" %
               (len(to_tag[retention_days]), delete_fmt))
 
-
+        #create DeleteOn tag
         ec.create_tags(Resources=to_tag[retention_days],
                        Tags=[
                            {
